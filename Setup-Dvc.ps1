@@ -483,15 +483,49 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
+# DVC installs post-checkout, pre-commit and pre-push only. That leaves a gap:
+# 'git pull' fast-forwards via a merge (post-merge), and 'git pull --rebase'
+# rewrites history (post-rewrite). Neither fires post-checkout, so pulled data
+# would not appear until the next branch switch. Add those two hooks ourselves.
+
+$hooksDirAll = (& git rev-parse --git-path hooks 2>$null)
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($hooksDirAll)) {
+    $hooksDirAll = Join-Path $repoRoot '.git\hooks'
+}
+$hooksDirAll = $hooksDirAll.Trim()
+# git returns a path relative to the repo root. .NET file APIs resolve relative
+# paths against the process working directory, not PowerShell's location, so
+# make it absolute before using it.
+if (-not [IO.Path]::IsPathRooted($hooksDirAll)) {
+    $hooksDirAll = Join-Path $repoRoot $hooksDirAll
+}
+$hooksDirAll = $hooksDirAll -replace '/', '\'
+if (-not (Test-Path -LiteralPath $hooksDirAll)) {
+    New-Item -ItemType Directory -Path $hooksDirAll -Force | Out-Null
+}
+
+foreach ($hookName in @('post-merge', 'post-rewrite')) {
+    $hookPath = Join-Path $hooksDirAll $hookName
+    if (Test-Path -LiteralPath $hookPath) {
+        $existingBody = Get-Content -LiteralPath $hookPath -Raw -ErrorAction SilentlyContinue
+        if ($existingBody -match 'dvc\s+checkout') {
+            Write-Ok "$hookName hook already present"
+        } else {
+            Write-Warn "An existing $hookName hook was left alone. Add 'dvc checkout' to it manually."
+        }
+        continue
+    }
+    # LF endings, no BOM: git runs these through sh, which chokes on CRLF.
+    [IO.File]::WriteAllText($hookPath, "#!/bin/sh`nexec dvc checkout`n",
+                            (New-Object Text.UTF8Encoding $false))
+    Write-Ok "$hookName hook installed (keeps 'git pull' in sync)"
+}
+
 if ($haveRemote) {
     Write-Ok 'post-checkout, pre-commit and pre-push hooks installed'
 } else {
     # core.hooksPath may relocate the hooks directory, so ask git where it is.
-    $hooksDir = (& git rev-parse --git-path hooks 2>$null)
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($hooksDir)) {
-        $hooksDir = Join-Path $repoRoot '.git\hooks'
-    }
-    $prePush = Join-Path $hooksDir 'pre-push'
+    $prePush = Join-Path $hooksDirAll 'pre-push'
 
     if (Test-Path -LiteralPath $prePush) {
         # Only remove it if it is DVC's, never someone else's pre-push hook.
