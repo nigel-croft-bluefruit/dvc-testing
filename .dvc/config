@@ -1,0 +1,5 @@
+[cache]
+    dir = E:\data
+    type = "symlink,copy"
+[core]
+    autostage = true
