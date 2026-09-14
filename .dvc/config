@@ -1,5 +1,6 @@
 [cache]
     dir = E:\data
     type = "symlink,copy"
+    shared = group
 [core]
     autostage = true

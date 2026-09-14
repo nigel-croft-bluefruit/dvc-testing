@@ -1,0 +1,6 @@
+outs:
+- md5: f1d077224c86017f2adb171d619f519d.dir
+  size: 0
+  nfiles: 1
+  hash: md5
+  path: run3-linux
