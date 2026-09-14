@@ -123,16 +123,25 @@ function Invoke-Dvc {
 function Set-DvcConfig {
     param(
         [Parameter(Mandatory)][string]$Key,
-        [Parameter(Mandatory)][string]$Value
+        [Parameter(Mandatory)][string]$Value,
+        [switch]$Local
     )
-    $current = Invoke-Dvc -Arguments @('config', $Key) -Capture -AllowFailure
+    $scope = if ($Local) { @('--local') } else { @() }
+    $current = Invoke-Dvc -Arguments (@('config') + $scope + @($Key)) -Capture -AllowFailure
     if ($current -eq $Value) {
-        Write-Ok "$Key = $Value (already set)"
+        ok_config $Key $Value $Local
         return $false
     }
-    Invoke-Dvc -Arguments @('config', $Key, $Value) | Out-Null
-    Write-Ok "$Key = $Value"
+    Invoke-Dvc -Arguments (@('config') + $scope + @($Key, $Value)) | Out-Null
+    ok_config $Key $Value $Local $true
     return $true
+}
+
+function ok_config {
+    param([string]$Key, [string]$Value, [bool]$Local, [bool]$Changed = $false)
+    $where = if ($Local) { ' [local]' } else { '' }
+    $suffix = if ($Changed) { '' } else { ' (already set)' }
+    Write-Ok "$Key = $Value$where$suffix"
 }
 
 # ----------------------------------------------------------------------------
@@ -330,7 +339,23 @@ if (-not $sharedCache) {
         exit 1
     }
 
-    Set-DvcConfig -Key 'cache.dir' -Value $CacheDir | Out-Null
+    # cache.dir goes in .dvc/config.local, which is gitignored. The committed
+    # .dvc/config must stay platform-neutral: Windows needs a UNC path and
+    # Linux needs a mount point, and one string cannot be both.
+    Set-DvcConfig -Key 'cache.dir' -Value $CacheDir -Local | Out-Null
+
+    $committedConfig = Join-Path $repoRoot '.dvc\config'
+    if (Test-Path -LiteralPath $committedConfig) {
+        $committedBody = Get-Content -LiteralPath $committedConfig -Raw
+        if ($committedBody -match '(?m)^\s*dir\s*=') {
+            Write-Warn 'The committed .dvc/config sets cache.dir. Remove it so other platforms are not overridden:  dvc config --unset cache.dir'
+        }
+    }
+
+    # Platform-neutral, so it belongs in the committed config: this is what
+    # makes cache objects group-writable for Linux users sharing the cache.
+    # It is a no-op on Windows, where NTFS ACLs do the same job.
+    Set-DvcConfig -Key 'cache.shared' -Value 'group' | Out-Null
 
     # exFAT/FAT32 support neither links nor permissions - DVC silently copies.
     $fsType = $null
