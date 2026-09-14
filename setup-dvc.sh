@@ -31,6 +31,7 @@ REMOTE_NAME="storage"
 CACHE_GROUP=""
 ALLOW_COPY=0
 SKIP_INSTALL=0
+NEED_PATH_LINE=0
 
 usage() {
     sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
@@ -166,15 +167,21 @@ else
             "$PYTHON" -m pip install --user --upgrade dvc
         fi
 
-        # pip --user puts console scripts in ~/.local/bin, often not on PATH.
+        # pip --user puts console scripts in ~/.local/bin, which is often not
+        # on PATH. Ubuntu's ~/.profile adds it, but only at login and only if
+        # the directory already existed then - which it did not, until now.
         export PATH="$HOME/.local/bin:$PATH"
+        NEED_PATH_LINE=1
     fi
 fi
 
 if ! have dvc; then
     export PATH="$HOME/.local/bin:$PATH"
     if ! have dvc; then
-        fail 'DVC is installed but not on PATH. Add ~/.local/bin to PATH, open a new shell, and re-run with --skip-install.'
+        fail 'DVC is installed but not on PATH. Run:'
+        printf '    echo %s >> ~/.bashrc && source ~/.bashrc\n' \
+               "'export PATH=\"\$HOME/.local/bin:\$PATH\"'"
+        printf '  then re-run this script with --skip-install.\n'
         exit 1
     fi
 fi
@@ -445,6 +452,7 @@ fi
 step "Installing 'dvcadd' wrapper"
 
 MARKER='# >>> dvcadd (DVC #10780 workaround) >>>'
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
 read -r -d '' WRAPPER <<EOF || true
 
 $MARKER
@@ -457,6 +465,14 @@ EOF
 installed_to=()
 for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     [[ -e "$rc" ]] || continue
+
+    # Without this, a pip --user install leaves 'dvc' off PATH in new shells.
+    if (( NEED_PATH_LINE )) && ! grep -qF '.local/bin' "$rc"; then
+        printf '\n# Added by setup-dvc.sh: pip --user installs console scripts here\n%s\n' \
+            "$PATH_LINE" >> "$rc"
+        ok "Added ~/.local/bin to PATH in $rc"
+    fi
+
     if grep -qF "$MARKER" "$rc"; then
         ok "$(basename "$rc") already has dvcadd"
     else
